@@ -429,7 +429,8 @@ Você tem AUTONOMIA TOTAL no sistema financeiro. Pode:
 - Despesas = saídas de dinheiro (tipo: "despesa")
 - Use o mês correto no formato YYYY-MM
 - Para extratos, marque como "Pago" ou "Recebido" (já aconteceu)
-- Inclua a data do pagamento/recebimento quando disponível
+- OBRIGATÓRIO: Sempre inclua "dataPagamento" no formato "DD/MM/YYYY" (ex: "15/12/2025")
+- A data está disponível em cada transação do extrato - USE-A!
 
 ## RESPOSTAS
 - Seja conciso mas completo
