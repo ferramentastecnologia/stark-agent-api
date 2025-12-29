@@ -1,0 +1,72 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tabela para armazenar status de pagamentos (despesas e receitas)
+model PaymentStatus {
+  id            String   @id @default(cuid())
+  mes           String   // Ex: "2025-12"
+  tipo          String   // "despesa" ou "receita"
+  itemNome      String   // Nome do item
+  status        String   // "Pago", "A Pagar", "Recebido", "A Receber"
+  dataPagamento String?  // Data do pagamento se pago
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([mes, tipo, itemNome])
+  @@map("payment_status")
+}
+
+// Tabela para itens customizados (despesas/receitas adicionadas manualmente)
+model CustomItem {
+  id            String   @id @default(cuid())
+  mes           String   // Ex: "2025-12"
+  tipo          String   // "despesa" ou "receita"
+  nome          String
+  valor         Float
+  categoria     String?
+  status        String   @default("A Pagar")
+  vencimento    String?
+  dataPagamento String?
+  funcao        String?
+  tipoDetalhe   String?
+  empresa       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("custom_items")
+}
+
+// Tabela para itens deletados (para não mostrar itens do dados-mensais.js)
+model DeletedItem {
+  id        String   @id @default(cuid())
+  mes       String
+  tipo      String
+  itemNome  String
+  createdAt DateTime @default(now())
+
+  @@unique([mes, tipo, itemNome])
+  @@map("deleted_items")
+}
+
+// Tabela para itens editados
+model EditedItem {
+  id           String   @id @default(cuid())
+  mes          String
+  tipo         String
+  itemNome     String
+  novoNome     String?
+  novoValor    Float?
+  novaCategoria String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([mes, tipo, itemNome])
+  @@map("edited_items")
+}
