@@ -773,8 +773,25 @@ app.post('/agent', async (req, res) => {
     console.log(`📚 ${contexto.memorias.length} memórias carregadas`);
     const startTime = Date.now();
 
+    // Função de chamada com retry para rate limits
+    async function callClaudeWithRetry(params, maxRetries = 3) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          return await anthropic.messages.create(params);
+        } catch (error) {
+          if (error.status === 429 && attempt < maxRetries) {
+            const waitTime = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+            console.log(`⏳ Rate limit - aguardando ${waitTime/1000}s antes de tentar novamente (tentativa ${attempt}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
+
     // Loop de tool use
-    let response = await anthropic.messages.create({
+    let response = await callClaudeWithRetry({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 8192,
       system: systemPromptComMemoria,
@@ -808,10 +825,10 @@ app.post('/agent', async (req, res) => {
       messages.push({ role: 'user', content: toolResults });
       toolResults = [];
 
-      response = await anthropic.messages.create({
+      response = await callClaudeWithRetry({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 8192,
-        system: SYSTEM_PROMPT,
+        system: systemPromptComMemoria,
         tools: TOOLS,
         messages
       });
