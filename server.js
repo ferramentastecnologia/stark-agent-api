@@ -142,6 +142,31 @@ const TOOLS = [
       },
       required: ["itens"]
     }
+  },
+  {
+    name: "salvar_memoria",
+    description: "Salva uma informação importante na memória persistente. Use para lembrar fatos, preferências do usuário, contextos importantes, ou lembretes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tipo: { type: "string", enum: ["fato", "preferencia", "lembrete", "contexto"], description: "Tipo da memória" },
+        conteudo: { type: "string", description: "O que deve ser lembrado" },
+        relevancia: { type: "number", description: "Importância de 1-10 (10 = muito importante)" },
+        mes: { type: "string", description: "Mês relacionado no formato YYYY-MM (opcional)" }
+      },
+      required: ["tipo", "conteudo"]
+    }
+  },
+  {
+    name: "buscar_memorias",
+    description: "Busca memórias salvas anteriormente. Use para lembrar contextos, fatos ou preferências do usuário.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tipo: { type: "string", enum: ["fato", "preferencia", "lembrete", "contexto", "todos"], description: "Filtrar por tipo" },
+        mes: { type: "string", description: "Filtrar por mês (opcional)" }
+      }
+    }
   }
 ];
 
@@ -176,6 +201,12 @@ async function executarFerramenta(nome, input) {
 
       case "criar_multiplos_itens":
         return await criarMultiplosItens(input);
+
+      case "salvar_memoria":
+        return await salvarMemoria(input);
+
+      case "buscar_memorias":
+        return await buscarMemorias(input);
 
       default:
         return { success: false, error: `Ferramenta desconhecida: ${nome}` };
@@ -393,6 +424,85 @@ async function resumoFinanceiro(input) {
 }
 
 // ============================================
+// FUNÇÕES DE MEMÓRIA PERSISTENTE
+// ============================================
+async function salvarMemoria(input) {
+  const { tipo, conteudo, relevancia = 5, mes } = input;
+
+  const memoria = await prisma.starkMemory.create({
+    data: {
+      tipo,
+      conteudo,
+      relevancia,
+      mes
+    }
+  });
+
+  return {
+    success: true,
+    message: `Memória salva: "${conteudo.substring(0, 50)}..."`,
+    id: memoria.id
+  };
+}
+
+async function buscarMemorias(input) {
+  const { tipo = "todos", mes } = input;
+
+  const where = {};
+  if (tipo !== "todos") where.tipo = tipo;
+  if (mes) where.mes = mes;
+
+  const memorias = await prisma.starkMemory.findMany({
+    where,
+    orderBy: [{ relevancia: 'desc' }, { createdAt: 'desc' }],
+    take: 20
+  });
+
+  return {
+    success: true,
+    memorias: memorias.map(m => ({
+      tipo: m.tipo,
+      conteudo: m.conteudo,
+      relevancia: m.relevancia,
+      mes: m.mes,
+      data: m.createdAt.toISOString().split('T')[0]
+    })),
+    total: memorias.length
+  };
+}
+
+async function salvarMensagem(role, content, metadata = null) {
+  try {
+    await prisma.conversationMessage.create({
+      data: {
+        role,
+        content: content.substring(0, 10000), // Limitar tamanho
+        metadata: metadata ? JSON.stringify(metadata) : null
+      }
+    });
+  } catch (error) {
+    console.error('Erro ao salvar mensagem:', error);
+  }
+}
+
+async function carregarContexto() {
+  // Carregar últimas mensagens
+  const mensagens = await prisma.conversationMessage.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: 20
+  });
+
+  // Carregar memórias importantes
+  const memorias = await prisma.starkMemory.findMany({
+    where: { relevancia: { gte: 7 } },
+    orderBy: { relevancia: 'desc' },
+    take: 10
+  });
+
+  return { mensagens: mensagens.reverse(), memorias };
+}
+
+// ============================================
 // SYSTEM PROMPT
 // ============================================
 const SYSTEM_PROMPT = `Você é o STARK, o CFO Virtual da Starken Tecnologia.
@@ -432,6 +542,18 @@ Você tem AUTONOMIA TOTAL no sistema financeiro. Pode:
 - OBRIGATÓRIO: Sempre inclua "dataPagamento" no formato ISO "YYYY-MM-DD" (ex: "2025-12-15")
 - Converta a data do extrato (DD/MM/YYYY) para ISO (YYYY-MM-DD) antes de enviar
 - A data está disponível em cada transação do extrato - USE-A!
+
+## MEMÓRIA PERSISTENTE
+Você tem memória de longo prazo! Use as ferramentas:
+- "salvar_memoria": Salve fatos importantes, preferências do usuário, contextos relevantes
+- "buscar_memorias": Recupere informações salvas anteriormente
+
+QUANDO SALVAR MEMÓRIAS:
+- Informações sobre a empresa (funcionários, custos fixos, clientes)
+- Preferências do usuário (como ele gosta dos relatórios, categorias customizadas)
+- Contextos importantes (mudança de escritório, novos contratos, dívidas)
+- Lembretes (pagamentos futuros, prazos importantes)
+- Use relevância 8-10 para informações muito importantes
 
 ## RESPOSTAS
 - Seja conciso mas completo
@@ -483,6 +605,17 @@ app.post('/agent', async (req, res) => {
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+    // Carregar contexto persistente (memórias importantes)
+    const contexto = await carregarContexto();
+    let systemPromptComMemoria = SYSTEM_PROMPT;
+
+    if (contexto.memorias.length > 0) {
+      systemPromptComMemoria += `\n\n## MEMÓRIAS IMPORTANTES (do banco de dados)\n`;
+      contexto.memorias.forEach(m => {
+        systemPromptComMemoria += `- [${m.tipo}] ${m.conteudo}\n`;
+      });
+    }
+
     // Processar arquivo importado se houver
     let fileContext = '';
     if (importedFile) {
@@ -494,19 +627,23 @@ app.post('/agent', async (req, res) => {
       ? `${message}\n\n---\nDADOS DO ARQUIVO IMPORTADO:${fileContext}`
       : message;
 
+    // Salvar mensagem do usuário
+    await salvarMensagem('user', message, importedFile ? { arquivo: importedFile.filename } : null);
+
     const messages = [
       ...conversationHistory.slice(-6),
       { role: 'user', content: userMessage }
     ];
 
     console.log('🤖 Iniciando conversa com Claude...');
+    console.log(`📚 ${contexto.memorias.length} memórias carregadas`);
     const startTime = Date.now();
 
     // Loop de tool use
     let response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 8192,
-      system: SYSTEM_PROMPT,
+      system: systemPromptComMemoria,
       tools: TOOLS,
       messages
     });
@@ -555,13 +692,17 @@ app.post('/agent', async (req, res) => {
       .map(block => block.text)
       .join('\n');
 
+    // Salvar resposta do assistant
+    await salvarMensagem('assistant', textContent, { toolsUsed: iterations });
+
     res.json({
       success: true,
       response: textContent,
       usage: response.usage,
       model: 'claude-sonnet-4-20250514',
       elapsed,
-      toolsUsed: iterations
+      toolsUsed: iterations,
+      memoriasCarregadas: contexto.memorias.length
     });
 
   } catch (error) {
@@ -578,8 +719,8 @@ app.get('/', (req, res) => {
   res.json({
     status: 'online',
     service: 'STARK CFO Virtual API',
-    version: '2.0.0',
-    features: ['tool-use', 'crud-autonomy', 'prisma-database']
+    version: '3.0.0',
+    features: ['tool-use', 'crud-autonomy', 'prisma-database', 'persistent-memory']
   });
 });
 

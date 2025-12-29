@@ -70,3 +70,27 @@ model EditedItem {
   @@unique([mes, tipo, itemNome])
   @@map("edited_items")
 }
+
+// Histórico de conversas do STARK (memória persistente)
+model ConversationMessage {
+  id        String   @id @default(cuid())
+  role      String   // "user" ou "assistant"
+  content   String   // Conteúdo da mensagem
+  metadata  String?  // JSON com dados extras (arquivo importado, ferramentas usadas, etc)
+  createdAt DateTime @default(now())
+
+  @@map("conversation_messages")
+}
+
+// Memórias importantes extraídas das conversas
+model StarkMemory {
+  id        String   @id @default(cuid())
+  tipo      String   // "fato", "preferencia", "lembrete", "contexto"
+  conteudo  String   // O que o STARK deve lembrar
+  relevancia Int     @default(5) // 1-10, quanto maior mais importante
+  mes       String?  // Mês relacionado (opcional)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("stark_memories")
+}
