@@ -562,32 +562,146 @@ QUANDO SALVAR MEMÓRIAS:
 `;
 
 // ============================================
-// FUNÇÃO PARA PROCESSAR ARQUIVO IMPORTADO
+// FUNÇÃO PARA PROCESSAR ARQUIVO IMPORTADO (OTIMIZADA)
 // ============================================
 function processarArquivoImportado(importedFile) {
   if (!importedFile || !importedFile.items) return '';
 
   const items = importedFile.items || [];
 
+  // Separar receitas e despesas
+  const receitas = items.filter(i => i.tipo === 'receita' || i.tipo === 'entrada' || (i.valor && i.valor > 0 && i.tipo !== 'despesa'));
+  const despesas = items.filter(i => i.tipo === 'despesa' || i.tipo === 'saida' || (i.valor && i.valor < 0) || i.tipo === 'despesa');
+
+  // Calcular totais
+  const totalReceitas = receitas.reduce((sum, i) => sum + Math.abs(i.valor || 0), 0);
+  const totalDespesas = despesas.reduce((sum, i) => sum + Math.abs(i.valor || 0), 0);
+
+  // Agrupar despesas por categoria/descrição similar
+  const despesasAgrupadas = {};
+  despesas.forEach(item => {
+    const desc = (item.descricao || 'Outros').toLowerCase().trim();
+    // Simplificar descrição para agrupar
+    let categoria = categorizarTransacao(desc);
+    if (!despesasAgrupadas[categoria]) {
+      despesasAgrupadas[categoria] = { total: 0, count: 0, itens: [] };
+    }
+    despesasAgrupadas[categoria].total += Math.abs(item.valor || 0);
+    despesasAgrupadas[categoria].count++;
+    despesasAgrupadas[categoria].itens.push(item);
+  });
+
+  // Agrupar receitas por categoria
+  const receitasAgrupadas = {};
+  receitas.forEach(item => {
+    const desc = (item.descricao || 'Outros').toLowerCase().trim();
+    let categoria = categorizarReceita(desc);
+    if (!receitasAgrupadas[categoria]) {
+      receitasAgrupadas[categoria] = { total: 0, count: 0, itens: [] };
+    }
+    receitasAgrupadas[categoria].total += Math.abs(item.valor || 0);
+    receitasAgrupadas[categoria].count++;
+    receitasAgrupadas[categoria].itens.push(item);
+  });
+
   let context = `
 ═══════════════════════════════════════════════════════════════
-📎 ARQUIVO IMPORTADO: ${importedFile.filename}
+📎 ARQUIVOS IMPORTADOS: ${importedFile.filename}
 ═══════════════════════════════════════════════════════════════
 
-📊 RESUMO:
+📊 RESUMO GERAL:
 • Total de transações: ${items.length}
-• Receitas: R$ ${(importedFile.receitas || 0).toFixed(2)}
-• Despesas: R$ ${(importedFile.despesas || 0).toFixed(2)}
-• Saldo: R$ ${((importedFile.receitas || 0) - (importedFile.despesas || 0)).toFixed(2)}
+• Total Receitas: R$ ${totalReceitas.toFixed(2)} (${receitas.length} transações)
+• Total Despesas: R$ ${totalDespesas.toFixed(2)} (${despesas.length} transações)
+• Saldo: R$ ${(totalReceitas - totalDespesas).toFixed(2)}
 
-📋 TODAS AS TRANSAÇÕES:
+💰 RECEITAS POR CATEGORIA:
 `;
 
-  items.forEach((item, i) => {
-    context += `${i + 1}. [${item.tipo?.toUpperCase() || 'N/A'}] ${item.data || 'S/D'} | ${item.descricao || 'N/A'} | R$ ${item.valor?.toFixed(2) || '0.00'}\n`;
+  // Adicionar receitas agrupadas (ordenadas por valor)
+  Object.entries(receitasAgrupadas)
+    .sort((a, b) => b[1].total - a[1].total)
+    .forEach(([cat, data]) => {
+      context += `• ${cat}: R$ ${data.total.toFixed(2)} (${data.count}x)\n`;
+    });
+
+  context += `\n💸 DESPESAS POR CATEGORIA:\n`;
+
+  // Adicionar despesas agrupadas (ordenadas por valor)
+  Object.entries(despesasAgrupadas)
+    .sort((a, b) => b[1].total - a[1].total)
+    .forEach(([cat, data]) => {
+      context += `• ${cat}: R$ ${data.total.toFixed(2)} (${data.count}x)\n`;
+    });
+
+  // TOP 30 maiores despesas individuais (para detalhamento)
+  context += `\n📋 TOP 30 MAIORES DESPESAS:\n`;
+  despesas
+    .sort((a, b) => Math.abs(b.valor || 0) - Math.abs(a.valor || 0))
+    .slice(0, 30)
+    .forEach((item, i) => {
+      context += `${i + 1}. ${item.data || 'S/D'} | ${item.descricao || 'N/A'} | R$ ${Math.abs(item.valor || 0).toFixed(2)}\n`;
+    });
+
+  // TOP 20 maiores receitas individuais
+  context += `\n📋 TOP 20 MAIORES RECEITAS:\n`;
+  receitas
+    .sort((a, b) => Math.abs(b.valor || 0) - Math.abs(a.valor || 0))
+    .slice(0, 20)
+    .forEach((item, i) => {
+      context += `${i + 1}. ${item.data || 'S/D'} | ${item.descricao || 'N/A'} | R$ ${Math.abs(item.valor || 0).toFixed(2)}\n`;
+    });
+
+  // Lista completa compacta (para referência)
+  context += `\n📋 LISTA COMPLETA DE DESPESAS (para lançamento):\n`;
+  despesas.forEach((item, i) => {
+    const cat = categorizarTransacao((item.descricao || '').toLowerCase());
+    context += `${item.data}|${item.descricao}|${Math.abs(item.valor).toFixed(2)}|${cat}\n`;
   });
 
   return context;
+}
+
+// Categorizar transação automaticamente
+function categorizarTransacao(desc) {
+  desc = desc.toLowerCase();
+  if (desc.includes('pix') && (desc.includes('enviado') || desc.includes('transf'))) return 'Transferências PIX';
+  if (desc.includes('ted') || desc.includes('doc')) return 'Transferências TED/DOC';
+  if (desc.includes('combustivel') || desc.includes('posto') || desc.includes('shell') || desc.includes('ipiranga') || desc.includes('br ') || desc.includes('gasolina')) return 'Combustível';
+  if (desc.includes('uber') || desc.includes('99') || desc.includes('taxi') || desc.includes('cabify')) return 'Transporte App';
+  if (desc.includes('ifood') || desc.includes('rappi') || desc.includes('zé delivery') || desc.includes('aiqfome')) return 'Delivery';
+  if (desc.includes('restaurante') || desc.includes('lanchonete') || desc.includes('padaria') || desc.includes('mercado') || desc.includes('supermercado') || desc.includes('alimenta')) return 'Alimentação';
+  if (desc.includes('aluguel') || desc.includes('condominio') || desc.includes('iptu')) return 'Moradia';
+  if (desc.includes('luz') || desc.includes('energia') || desc.includes('enel') || desc.includes('celesc') || desc.includes('cemig')) return 'Energia';
+  if (desc.includes('agua') || desc.includes('saneamento') || desc.includes('copasa') || desc.includes('sabesp')) return 'Água';
+  if (desc.includes('internet') || desc.includes('telefone') || desc.includes('celular') || desc.includes('vivo') || desc.includes('claro') || desc.includes('tim') || desc.includes('oi ')) return 'Telecom';
+  if (desc.includes('netflix') || desc.includes('spotify') || desc.includes('youtube') || desc.includes('disney') || desc.includes('hbo') || desc.includes('amazon prime') || desc.includes('assinatura')) return 'Assinaturas';
+  if (desc.includes('software') || desc.includes('adobe') || desc.includes('microsoft') || desc.includes('google') || desc.includes('chatgpt') || desc.includes('openai') || desc.includes('anthropic')) return 'Software/SaaS';
+  if (desc.includes('salario') || desc.includes('folha') || desc.includes('funcionario') || desc.includes('prolabore') || desc.includes('pessoal')) return 'Pessoal/Salários';
+  if (desc.includes('imposto') || desc.includes('das') || desc.includes('inss') || desc.includes('fgts') || desc.includes('irpf') || desc.includes('icms') || desc.includes('iss')) return 'Impostos';
+  if (desc.includes('tarifa') || desc.includes('taxa') || desc.includes('anuidade') || desc.includes('iof') || desc.includes('bancaria')) return 'Taxas Bancárias';
+  if (desc.includes('farmacia') || desc.includes('drogaria') || desc.includes('saude') || desc.includes('medico') || desc.includes('hospital') || desc.includes('clinica') || desc.includes('plano')) return 'Saúde';
+  if (desc.includes('material') || desc.includes('papelaria') || desc.includes('escritorio')) return 'Material Escritório';
+  if (desc.includes('marketing') || desc.includes('publicidade') || desc.includes('ads') || desc.includes('meta ') || desc.includes('google ads')) return 'Marketing';
+  if (desc.includes('contador') || desc.includes('contabil') || desc.includes('juridico') || desc.includes('advogado')) return 'Serviços Profissionais';
+  if (desc.includes('saque') || desc.includes('retirada')) return 'Saques';
+  return 'Outros';
+}
+
+// Categorizar receita automaticamente
+function categorizarReceita(desc) {
+  desc = desc.toLowerCase();
+  if (desc.includes('pix') && desc.includes('recebido')) return 'PIX Recebido';
+  if (desc.includes('ted') || desc.includes('doc')) return 'TED/DOC Recebido';
+  if (desc.includes('boleto')) return 'Boleto Recebido';
+  if (desc.includes('cartao') || desc.includes('card') || desc.includes('visa') || desc.includes('master') || desc.includes('elo')) return 'Cartão de Crédito';
+  if (desc.includes('asaas') || desc.includes('pagarme') || desc.includes('stripe') || desc.includes('mercadopago') || desc.includes('pagseguro')) return 'Gateway de Pagamento';
+  if (desc.includes('venda') || desc.includes('servico') || desc.includes('projeto') || desc.includes('consultoria')) return 'Serviços/Projetos';
+  if (desc.includes('mensalidade') || desc.includes('assinatura') || desc.includes('recorrente')) return 'Mensalidade/MRR';
+  if (desc.includes('rendimento') || desc.includes('juros') || desc.includes('aplicacao')) return 'Rendimentos';
+  if (desc.includes('reembolso') || desc.includes('estorno') || desc.includes('devolucao')) return 'Reembolso';
+  if (desc.includes('emprestimo') || desc.includes('credito')) return 'Empréstimo';
+  return 'Outros';
 }
 
 // ============================================
@@ -707,9 +821,36 @@ app.post('/agent', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erro no STARK:', error);
+
+    // Tratamento específico de erros
+    if (error.message && error.message.includes('rate_limit')) {
+      return res.status(429).json({
+        success: false,
+        error: 'API temporariamente sobrecarregada. Aguarde alguns segundos e tente novamente.',
+        details: 'rate_limit'
+      });
+    }
+
+    if (error.message && error.message.includes('context_length')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Muitos dados para processar de uma vez. Tente com menos arquivos ou peça para processar um mês de cada vez.',
+        details: 'context_length'
+      });
+    }
+
+    if (error.message && error.message.includes('overloaded')) {
+      return res.status(503).json({
+        success: false,
+        error: 'Servidor temporariamente sobrecarregado. Tente novamente em alguns segundos.',
+        details: 'overloaded'
+      });
+    }
+
     res.status(500).json({
-      error: error.message,
-      details: 'Erro ao processar requisição'
+      success: false,
+      error: error.message || 'Erro interno do servidor',
+      details: 'internal_error'
     });
   }
 });
